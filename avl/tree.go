@@ -25,6 +25,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
+
 	"github.com/perlin-network/wavelet/lru"
 
 	"github.com/perlin-network/wavelet/store"
@@ -376,14 +378,27 @@ func (t *Tree) iterateDiff(prevViewID uint64, callback func(n *node) bool) {
 	}
 }
 
-func (t *Tree) DumpDiff(prevViewID uint64) []byte {
+// DumpDiffAll is a wrapper of DumpDiff which simply
+// dumps the diff into memory (similar to ioutil.ReadAll).
+func (t *Tree) DumpDiffAll(prevViewID uint64) []byte {
 	buf := bytebufferpool.Get()
 	defer bytebufferpool.Put(buf)
+
+	_ = t.DumpDiff(prevViewID, buf)
+	return buf.Bytes()
+}
+
+// DumpDiff writes the AVL tree difference into a io.Writer.
+func (t *Tree) DumpDiff(prevViewID uint64, wr io.Writer) error {
+	var lastErr error
 	t.iterateDiff(prevViewID, func(n *node) bool {
-		n.serializeForDifference(buf)
+		if err := n.serializeForDifference(wr); err != nil {
+			lastErr = err
+			return false
+		}
 		return true
 	})
-	return buf.Bytes()
+	return lastErr
 }
 
 func (t *Tree) IterateLeafDiff(prevViewID uint64, callback func(key, value []byte) bool) {

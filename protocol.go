@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/perlin-network/wavelet/log"
 	"github.com/perlin-network/wavelet/sys"
 	"github.com/pkg/errors"
@@ -83,7 +84,10 @@ func (p *Protocol) Sync(stream Wavelet_SyncServer) error {
 
 	res := &SyncResponse{}
 
-	diff := p.ledger.accounts.Snapshot().DumpDiff(req.GetRoundId())
+	// TODO: Use DumpDiff to write the diff to a buffered writer which
+	// writes to disk if buffer length exceeds X bytes (to avoid writing to
+	// disk if the diff is small)
+	diff := p.ledger.accounts.Snapshot().DumpDiffAll(req.GetRoundId())
 	header := &SyncInfo{LatestRound: p.ledger.rounds.Latest().Marshal()}
 
 	for i := 0; i < len(diff); i += sys.SyncChunkSize {
