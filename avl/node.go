@@ -442,7 +442,7 @@ func (n *node) dfs(t *Tree, allowMissingNodes bool, cb func(*node) (bool, error)
 	return nil
 }
 
-func DeserializeFromDifference(r *bytes.Reader, localViewID uint64) (*node, error) {
+func DeserializeFromDifference(r io.Reader, localViewID uint64) (*node, error) {
 	var buf64 [8]byte
 
 	var id [MerkleHashSize]byte
@@ -460,11 +460,11 @@ func DeserializeFromDifference(r *bytes.Reader, localViewID uint64) (*node, erro
 		return nil, errors.New("got view id < local view id")
 	}
 
-	_kind, err := r.ReadByte()
+	_, err = r.Read(buf64[:1])
 	if err != nil {
 		return nil, err
 	}
-	kind := nodeType(_kind)
+	kind := nodeType(buf64[0])
 
 	if kind == NodeLeafValue {
 		_, err = r.Read(buf64[:4])

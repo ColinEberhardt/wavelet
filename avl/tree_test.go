@@ -175,7 +175,7 @@ func TestTree_Diff_Randomized(t *testing.T) {
 				return false
 			}
 
-			assert.NoError(t, a.ApplyDiff(b.DumpDiffAll(a.viewID)))
+			assert.NoError(t, a.ApplyDiffFromBytes(b.DumpDiffAll(a.viewID)))
 		}
 
 		a.SetViewID(uint64(i))
@@ -187,9 +187,9 @@ func TestTree_Diff_Randomized(t *testing.T) {
 
 	assert.NoError(t, quick.Check(fn, &quick.Config{MaxCount: 10000}))
 
-	assert.NoError(t, tree1.ApplyDiff(tree2.DumpDiffAll(tree1.viewID)))
+	assert.NoError(t, tree1.ApplyDiffFromBytes(tree2.DumpDiffAll(tree1.viewID)))
 	assert.NoError(t, tree1.Commit())
-	assert.NoError(t, tree2.ApplyDiff(tree1.DumpDiffAll(tree2.viewID)))
+	assert.NoError(t, tree2.ApplyDiffFromBytes(tree1.DumpDiffAll(tree2.viewID)))
 	assert.NoError(t, tree2.Commit())
 	assert.Equal(t, tree1.root.id, tree2.root.id)
 }
@@ -223,7 +223,7 @@ func TestTree_Diff_UpdateNotifier(t *testing.T) {
 
 	diffMap := make(map[string]string)
 	iterCount := 0
-	assert.NoError(t, tree2.ApplyDiffWithUpdateNotifier(tree1.DumpDiffAll(tree2.viewID), func(k, v []byte) {
+	assert.NoError(t, tree2.ApplyDiffFromBytesWithUpdateNotifier(tree1.DumpDiffAll(tree2.viewID), func(k, v []byte) {
 		diffMap[string(k)] = string(v)
 		iterCount++
 	}))

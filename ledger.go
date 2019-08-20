@@ -25,11 +25,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/perlin-network/wavelet/lru"
 	"math/rand"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/perlin-network/wavelet/lru"
 
 	"github.com/perlin-network/noise"
 	"github.com/perlin-network/noise/skademlia"
@@ -1270,7 +1271,7 @@ func (l *Ledger) SyncToLatestRound() {
 
 		snapshot := l.accounts.Snapshot()
 
-		if err := snapshot.ApplyDiff(diff); err != nil {
+		if err := snapshot.ApplyDiffFromBytes(diff); err != nil {
 			logger.Error().
 				Uint64("target_round", latest.Index).
 				Err(err).
