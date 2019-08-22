@@ -262,7 +262,7 @@ func TestTree_ApplyEmptyDiff(t *testing.T) {
 	tree1.Commit()
 	tree2.Commit()
 
-	assert.NoError(t, tree2.ApplyDiff(tree1.DumpDiffAll(tree2.viewID)))
+	assert.NoError(t, tree2.ApplyDiffFromBytes(tree1.DumpDiffAll(tree2.viewID)))
 
 	assert.Equal(t, tree1.root.id, tree2.root.id)
 }
@@ -283,7 +283,7 @@ func TestTree_Difference(t *testing.T) {
 
 	tree2.Commit()
 
-	assert.NoError(t, tree2.ApplyDiff(tree.DumpDiffAll(0)))
+	assert.NoError(t, tree2.ApplyDiffFromBytes(tree.DumpDiffAll(0)))
 	assert.Equal(t, tree2.viewID, uint64(1))
 	tree2.SetViewID(2)
 	tree2.Insert([]byte("k2"), []byte("2"))
@@ -295,7 +295,7 @@ func TestTree_Difference(t *testing.T) {
 	assert.Equal(t, []byte("2"), result)
 
 	tree.Commit()
-	assert.NoError(t, tree.ApplyDiff(tree2.DumpDiffAll(1)))
+	assert.NoError(t, tree.ApplyDiffFromBytes(tree2.DumpDiffAll(1)))
 	assert.Equal(t, tree.viewID, uint64(2))
 
 	result, _ = tree.Lookup([]byte("k2"))

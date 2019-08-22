@@ -40,6 +40,7 @@ var GCAliveMarkPrefix = []byte("@2:")
 var OldRootsPrefix = []byte("@3:")
 var RootKey = []byte(".root")
 var NextOldRootIndexKey = []byte(".next_old_root")
+var DiffsKeyPrefix = []byte("diffs:")
 
 const DefaultCacheSize = 2048
 const MaxWriteBatchSize = 1024
@@ -418,7 +419,7 @@ func (t *Tree) ApplyDiffFromBytesWithUpdateNotifier(diff []byte, updateNotifier 
 func (t *Tree) ApplyDiffWithUpdateNotifier(diff io.Reader, updateNotifier func(key, value []byte)) error {
 	var root *node
 	unresolved := make(map[[MerkleHashSize]byte]struct{})
-	preloaded := make(map[[MerkleHashSize]byte]*node)
+	preloaded := newNodeDiffHashMap(t.kv, DiffsKeyPrefix, t.viewID)
 
 	for {
 		n, err := DeserializeFromDifference(diff, t.viewID)
@@ -429,7 +430,10 @@ func (t *Tree) ApplyDiffWithUpdateNotifier(diff io.Reader, updateNotifier func(k
 			return err
 		}
 
-		preloaded[n.id] = n
+		if err := preloaded.Put(n); err != nil {
+			return err
+		}
+
 		if root == nil {
 			root = n
 		} else {

@@ -640,7 +640,7 @@ func mustDeserialize(r *bytes.Reader) *node {
 }
 
 // populateDiffs constructs a valid AVL tree from the incoming preloaded tree difference.
-func populateDiffs(t *Tree, id [MerkleHashSize]byte, preloaded map[[MerkleHashSize]byte]*node, visited map[[MerkleHashSize]byte]struct{}, updateNotifier func(key, value []byte)) (*node, error) {
+func populateDiffs(t *Tree, id [MerkleHashSize]byte, preloaded *nodeDiffHashMap, visited map[[MerkleHashSize]byte]struct{}, updateNotifier func(key, value []byte)) (*node, error) {
 	if t.root != nil && !t.root.wroteBack {
 		return nil, errors.New("cannot call populateDiffs() on a dirty tree")
 	}
@@ -650,13 +650,18 @@ func populateDiffs(t *Tree, id [MerkleHashSize]byte, preloaded map[[MerkleHashSi
 	}
 	visited[id] = struct{}{}
 
-	var err error
-	n := preloaded[id]
+	n, err := preloaded.Get(id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Node is not a preloaded diff
 	if n == nil {
 		n, err = t.loadNode(id)
 		if err != nil {
 			return nil, err
 		}
+
 		return n, nil
 	}
 
