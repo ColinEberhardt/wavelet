@@ -38,6 +38,7 @@ func (h *chunkHashMap) Get(checksum [blake2b.Size256]byte) ([]byte, error) {
 		return nil, nil
 	}
 
+	// Only touch KV if key is present but not in the cache
 	chunk, err := h.kv.Get(append(h.prefix, checksum[:]...))
 	if err != nil {
 		return nil, err
@@ -48,11 +49,19 @@ func (h *chunkHashMap) Get(checksum [blake2b.Size256]byte) ([]byte, error) {
 }
 
 func (h *chunkHashMap) Put(checksum [blake2b.Size256]byte, chunk []byte) error {
-	h.cache.Put(checksum, chunk)
+	var err error
+	h.cache.PutWithEvictCallback(checksum, chunk, func(key interface{}, val interface{}) {
+		evictedKey := key.([blake2b.Size256]byte)
+		evicted := val.([]byte)
+		err = h.kv.Put(append(h.prefix, evictedKey[:]...), evicted)
+	})
+
+	if err != nil {
+		return err
+	}
 
 	// Keep track of all keys in the map to avoid querying the KV
 	// if the key is not present
 	h.keys[checksum] = struct{}{}
-
-	return h.kv.Put(append(h.prefix, checksum[:]...), chunk)
+	return nil
 }

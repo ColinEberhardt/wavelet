@@ -46,6 +46,7 @@ func (h *nodeDiffHashMap) Get(id [MerkleHashSize]byte) (*node, error) {
 		return nil, nil
 	}
 
+	// Only touch KV if key is present but not in the cache
 	b, err := h.kv.Get(append(h.prefix, id[:]...))
 	if err != nil {
 		return nil, err
@@ -60,16 +61,24 @@ func (h *nodeDiffHashMap) Get(id [MerkleHashSize]byte) (*node, error) {
 	return node, nil
 }
 
-func (h *nodeDiffHashMap) Put(node *node) error {
-	h.cache.Put(node.id, node)
+func (h *nodeDiffHashMap) Put(nd *node) error {
+	var err error
+	h.cache.PutWithEvictCallback(nd.id, nd, func(key interface{}, val interface{}) {
+		evicted := val.(*node)
 
-	buf := bytebufferpool.Get()
-	defer bytebufferpool.Put(buf)
-	node.serializeForDifference(buf)
+		buf := bytebufferpool.Get()
+		defer bytebufferpool.Put(buf)
+		evicted.serializeForDifference(buf)
+
+		err = h.kv.Put(append(h.prefix, evicted.id[:]...), buf.Bytes())
+	})
+
+	if err != nil {
+		return err
+	}
 
 	// Keep track of all keys in the map to avoid querying the KV
 	// if the key is not present
-	h.keys[node.id] = struct{}{}
-
-	return h.kv.Put(append(h.prefix, node.id[:]...), buf.Bytes())
+	h.keys[nd.id] = struct{}{}
+	return nil
 }
