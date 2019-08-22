@@ -23,6 +23,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/perlin-network/wavelet/log"
 	"github.com/perlin-network/wavelet/sys"
@@ -76,6 +78,42 @@ func (p *Protocol) Query(ctx context.Context, req *QueryRequest) (*QueryResponse
 	return res, nil
 }
 
+// channelBuffer is a buffer which blocks write if the
+// buffer is full.
+type channelBuffer struct {
+	Bytes chan byte
+
+	// If reading blocks longer than ReadTimeout,
+	// io.EOF is returned.
+	ReadTimeout time.Duration
+}
+
+func (b *channelBuffer) Read(buf []byte) (int, error) {
+	n := 0
+	for n < len(buf) {
+		select {
+		case bb := <-b.Bytes:
+			buf[n] = bb
+			n++
+
+		case <-time.After(b.ReadTimeout):
+			return n, io.EOF
+		}
+	}
+
+	return n, nil
+}
+
+func (b *channelBuffer) Write(buf []byte) (int, error) {
+	for _, bb := range buf {
+		// Write will block indefinitely, basically slowing
+		// down diff dumping if read is too fast
+		b.Bytes <- bb
+	}
+
+	return len(buf), nil
+}
+
 func (p *Protocol) Sync(stream Wavelet_SyncServer) error {
 	req, err := stream.Recv()
 	if err != nil {
@@ -84,24 +122,38 @@ func (p *Protocol) Sync(stream Wavelet_SyncServer) error {
 
 	res := &SyncResponse{}
 
-	// TODO: Use DumpDiff to write the diff to a buffered writer which
-	// writes to disk if buffer length exceeds X bytes (to avoid writing to
-	// disk if the diff is small)
-	diff := p.ledger.accounts.Snapshot().DumpDiffAll(req.GetRoundId())
+	// The diffs are dumped into an in-memory buffer, while at the same time,
+	// it is chunked as fast as possible. This avoids needing to write the chunks
+	// into memory, as that is being handled by cacheChunks.
+	buf := &channelBuffer{Bytes: make(chan byte, 1024), ReadTimeout: time.Millisecond * 100}
 	header := &SyncInfo{LatestRound: p.ledger.rounds.Latest().Marshal()}
 
-	for i := 0; i < len(diff); i += sys.SyncChunkSize {
-		end := i + sys.SyncChunkSize
+	chunking := make(chan struct{})
+	go func() {
+		defer close(chunking)
 
-		if end > len(diff) {
-			end = len(diff)
+		var chunk [sys.SyncChunkSize]byte
+		for {
+			n, err := buf.Read(chunk[:])
+			if n > 0 {
+				checksum := blake2b.Sum256(chunk[:n])
+				p.ledger.chunks.Put(checksum, chunk[:n])
+
+				header.Checksums = append(header.Checksums, checksum[:])
+			}
+
+			if err == io.EOF {
+				return
+			}
 		}
+	}()
 
-		checksum := blake2b.Sum256(diff[i:end])
-		p.ledger.cacheChunks.Put(checksum, diff[i:end])
-
-		header.Checksums = append(header.Checksums, checksum[:])
+	if err := p.ledger.accounts.Snapshot().DumpDiff(req.GetRoundId(), buf); err != nil {
+		return err
 	}
+
+	// Wait for chunking to finish
+	<-chunking
 
 	res.Data = &SyncResponse_Header{Header: header}
 
@@ -121,18 +173,17 @@ func (p *Protocol) Sync(stream Wavelet_SyncServer) error {
 		var checksum [blake2b.Size256]byte
 		copy(checksum[:], req.GetChecksum())
 
-		if chunk, found := p.ledger.cacheChunks.Load(checksum); found {
-			chunk := chunk.([]byte)
-
-			logger := log.Sync("provide_chunk")
-			logger.Info().
-				Hex("requested_hash", req.GetChecksum()).
-				Msg("Responded to sync chunk request.")
-
-			res.Data.(*SyncResponse_Chunk).Chunk = chunk
-		} else {
-			res.Data.(*SyncResponse_Chunk).Chunk = nil
+		chunk, err := p.ledger.chunks.Get(checksum)
+		if err != nil {
+			return err
 		}
+
+		logger := log.Sync("provide_chunk")
+		logger.Info().
+			Hex("requested_hash", req.GetChecksum()).
+			Msg("Responded to sync chunk request.")
+
+		res.Data.(*SyncResponse_Chunk).Chunk = chunk
 
 		if err = stream.Send(res); err != nil {
 			return err

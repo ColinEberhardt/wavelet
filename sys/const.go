@@ -39,6 +39,11 @@ const (
 	WithdrawReward
 )
 
+const (
+	// Size of individual chunks sent for a syncing peer.
+	SyncChunkSize = 16384
+)
+
 var (
 	// S/Kademlia overlay network parameters.
 	SKademliaC1 = 1
@@ -54,9 +59,6 @@ var (
 
 	// Number of rounds we should be behind before we start syncing.
 	SyncIfRoundsDifferBy uint64 = 2
-
-	// Size of individual chunks sent for a syncing peer.
-	SyncChunkSize = 16384
 
 	// Max graph depth difference to search for eligible transaction
 	// parents from for our node.

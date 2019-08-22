@@ -56,6 +56,8 @@ const (
 
 var (
 	ErrOutOfSync = errors.New("Node is currently ouf of sync. Please try again later.")
+
+	ChunksKeyPrefix = []byte("chunks:")
 )
 
 type Ledger struct {
@@ -85,7 +87,7 @@ type Ledger struct {
 	syncStatusLock sync.RWMutex
 
 	cacheCollapse *lru.LRU
-	cacheChunks   *lru.LRU
+	chunks        *chunkHashMap
 
 	sendQuota chan struct{}
 }
@@ -177,7 +179,7 @@ func NewLedger(kv store.KV, client *skademlia.Client, opts ...Option) *Ledger {
 		syncVotes: make(chan vote, sys.SnowballK),
 
 		cacheCollapse: lru.NewLRU(16),
-		cacheChunks:   lru.NewLRU(1024), // In total, it will take up 1024 * 4MB.
+		chunks:        newChunkHashMap(kv, ChunksKeyPrefix).WithLRUCache(1024), // In total, it will take up 1024 * 4MB.
 
 		sendQuota: make(chan struct{}, 2000),
 	}
