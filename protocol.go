@@ -121,12 +121,12 @@ func (p *Protocol) Sync(stream Wavelet_SyncServer) error {
 	}
 
 	res := &SyncResponse{}
+	header := &SyncInfo{LatestRound: p.ledger.rounds.Latest().Marshal()}
 
 	// The diffs are dumped into an in-memory buffer, while at the same time,
 	// it is chunked as fast as possible. This avoids needing to write the chunks
 	// into memory, as that is being handled by cacheChunks.
 	buf := &channelBuffer{Bytes: make(chan byte, 1024), ReadTimeout: time.Millisecond * 100}
-	header := &SyncInfo{LatestRound: p.ledger.rounds.Latest().Marshal()}
 
 	chunking := make(chan struct{})
 	go func() {
