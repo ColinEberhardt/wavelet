@@ -25,7 +25,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +90,7 @@ type Ledger struct {
 
 	cacheCollapse *lru.LRU
 	chunks        *chunkHashMap
+	chunksBuffer  *os.File
 
 	sendQuota chan struct{}
 }
@@ -160,6 +163,11 @@ func NewLedger(kv store.KV, client *skademlia.Client, opts ...Option) *Ledger {
 	finalizer := NewSnowball(WithName("finalizer"), WithBeta(sys.SnowballBeta))
 	syncer := NewSnowball(WithName("syncer"), WithBeta(sys.SnowballBeta))
 
+	chunksBuffer, err := ioutil.TempFile("", "chunks")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("BUG: COULD NOT CREATE CHUNKS BUFFER ON DISK.")
+	}
+
 	ledger := &Ledger{
 		client:  client,
 		metrics: metrics,
@@ -180,6 +188,7 @@ func NewLedger(kv store.KV, client *skademlia.Client, opts ...Option) *Ledger {
 
 		cacheCollapse: lru.NewLRU(16),
 		chunks:        newChunkHashMap(kv, ChunksKeyPrefix).WithLRUCache(1024), // In total, it will take up 1024 * 4MB.
+		chunksBuffer:  chunksBuffer,
 
 		sendQuota: make(chan struct{}, 2000),
 	}
@@ -1102,6 +1111,7 @@ func (l *Ledger) SyncToLatestRound() {
 			idx      int
 			checksum [blake2b.Size256]byte
 			streams  []Wavelet_SyncClient
+			size     int
 		}
 
 		var sources []source
@@ -1157,7 +1167,13 @@ func (l *Ledger) SyncToLatestRound() {
 			idx++
 		}
 
-		chunks := make([][]byte, len(sources))
+		if err := l.chunksBuffer.Truncate(int64(len(sources)) * sys.SyncChunkSize); err != nil {
+			logger.Error().
+				Uint64("target_round", latest.Index).
+				Err(err).
+				Msg("Failed to truncate chunks buffer. Restarting sync...")
+			goto SYNC
+		}
 
 		// Streams may not concurrently send and receive messages at once.
 
@@ -1170,7 +1186,7 @@ func (l *Ledger) SyncToLatestRound() {
 		workerWG.Add(cap(workers))
 
 		var chunkWG sync.WaitGroup
-		chunkWG.Add(len(chunks))
+		chunkWG.Add(len(sources))
 
 		logger.Debug().
 			Int("num_chunks", len(sources)).
@@ -1224,8 +1240,12 @@ func (l *Ledger) SyncToLatestRound() {
 						}
 
 						// We found the chunk! Store the chunks contents.
+						if _, err := l.chunksBuffer.WriteAt(chunk, int64(src.idx)*sys.SyncChunkSize); err != nil {
+							continue
+						}
 
-						chunks[src.idx] = chunk
+						sources[src.idx].size = len(chunk)
+
 						break
 					}
 
@@ -1251,10 +1271,10 @@ func (l *Ledger) SyncToLatestRound() {
 
 		dispose() // Shutdown all streams as we no longer need them.
 
-		var diff []byte
-
-		for i, chunk := range chunks {
-			if chunk == nil {
+		// Check all chunks has been received
+		var diffSize int64
+		for i, src := range sources {
+			if src.size == 0 {
 				logger.Error().
 					Uint64("target_round", latest.Index).
 					Hex("chunk_checksum", sources[i].checksum[:]).
@@ -1263,7 +1283,7 @@ func (l *Ledger) SyncToLatestRound() {
 				goto SYNC
 			}
 
-			diff = append(diff, chunk...)
+			diffSize += int64(src.size)
 		}
 
 		logger.Info().
@@ -1273,7 +1293,15 @@ func (l *Ledger) SyncToLatestRound() {
 
 		snapshot := l.accounts.Snapshot()
 
-		if err := snapshot.ApplyDiffFromBytes(diff); err != nil {
+		if err := l.chunksBuffer.Truncate(diffSize); err != nil {
+			logger.Error().
+				Uint64("target_round", latest.Index).
+				Err(err).
+				Msg("Failed to truncate re-assembled diff. Restarting sync...")
+			goto SYNC
+		}
+
+		if err := snapshot.ApplyDiff(l.chunksBuffer); err != nil {
 			logger.Error().
 				Uint64("target_round", latest.Index).
 				Err(err).
@@ -1317,7 +1345,7 @@ func (l *Ledger) SyncToLatestRound() {
 
 		logger = log.Sync("apply")
 		logger.Info().
-			Int("num_chunks", len(chunks)).
+			Int("num_chunks", len(sources)).
 			Uint64("old_round", current.Index).
 			Uint64("new_round", latest.Index).
 			Uint8("old_difficulty", current.ExpectedDifficulty(sys.MinDifficulty, sys.DifficultyScaleFactor)).
