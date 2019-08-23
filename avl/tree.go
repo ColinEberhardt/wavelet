@@ -379,16 +379,6 @@ func (t *Tree) iterateDiff(prevViewID uint64, callback func(n *node) bool) {
 	}
 }
 
-// DumpDiffAll is a wrapper of DumpDiff which simply
-// dumps the diff into memory (similar to ioutil.ReadAll).
-func (t *Tree) DumpDiffAll(prevViewID uint64) []byte {
-	buf := bytebufferpool.Get()
-	defer bytebufferpool.Put(buf)
-
-	_ = t.DumpDiff(prevViewID, buf)
-	return buf.Bytes()
-}
-
 // DumpDiff writes the AVL tree difference into a io.Writer.
 func (t *Tree) DumpDiff(prevViewID uint64, wr io.Writer) error {
 	var lastErr error
@@ -410,10 +400,6 @@ func (t *Tree) IterateLeafDiff(prevViewID uint64, callback func(key, value []byt
 			return true
 		}
 	})
-}
-
-func (t *Tree) ApplyDiffFromBytesWithUpdateNotifier(diff []byte, updateNotifier func(key, value []byte)) error {
-	return t.ApplyDiffWithUpdateNotifier(bytes.NewReader(diff), updateNotifier)
 }
 
 func (t *Tree) ApplyDiffWithUpdateNotifier(diff io.Reader, updateNotifier func(key, value []byte)) error {
@@ -463,10 +449,6 @@ func (t *Tree) ApplyDiffWithUpdateNotifier(diff io.Reader, updateNotifier func(k
 	t.root = root
 
 	return nil
-}
-
-func (t *Tree) ApplyDiffFromBytes(diff []byte) error {
-	return t.ApplyDiff(bytes.NewReader(diff))
 }
 
 func (t *Tree) ApplyDiff(diff io.Reader) error {
