@@ -533,3 +533,20 @@ func loadKeys(t testing.TB, wallet string) *skademlia.Keypair {
 
 	return keys
 }
+
+func waitFor(t testing.TB, err string, fn func() bool) {
+	timeout := time.NewTimer(time.Second * 10)
+	ticker := time.NewTicker(time.Millisecond * 500)
+
+	for {
+		select {
+		case <-timeout.C:
+			t.Fatal(err)
+
+		case <-ticker.C:
+			if fn() {
+				return
+			}
+		}
+	}
+}
