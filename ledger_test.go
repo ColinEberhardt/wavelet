@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/perlin-network/wavelet/sys"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -236,6 +237,52 @@ func TestLedger_Stake(t *testing.T) {
 		assert.EqualValues(t, aliceBalance, node.BalanceOfAccount(alice))
 		assert.EqualValues(t, alice.Stake(), node.StakeOfAccount(alice))
 	}
+}
+
+func TestLedger_Sync(t *testing.T) {
+	testnet := NewTestNetwork(t)
+	defer testnet.Cleanup()
+
+	// Setup network with 3 nodes
+	alice := testnet.Faucet()
+	for i := 0; i < 2; i++ {
+		testnet.AddNode(t)
+	}
+
+	testnet.WaitForSync(t)
+
+	// Advance the network by a few rounds larger than sys.SyncIfRoundsDifferBy
+	for i := 0; i < int(sys.SyncIfRoundsDifferBy)+1; i++ {
+		<-alice.WaitForSync()
+		_, err := alice.PlaceStake(10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-alice.WaitForConsensus()
+	}
+
+	testnet.WaitForRound(t, alice.RoundIndex())
+
+	// When a new node joins the network, it will eventually
+	// sync with the other nodes
+	charlie := testnet.AddNode(t)
+
+	timeout := time.NewTimer(time.Second * 30)
+	for {
+		select {
+		case <-timeout.C:
+			t.Fatal("timed out waiting for sync")
+
+		default:
+			ri := <-charlie.WaitForRound(alice.RoundIndex())
+			if ri >= alice.RoundIndex() {
+				goto DONE
+			}
+		}
+	}
+
+DONE:
+	assert.EqualValues(t, alice.Balance(), charlie.BalanceOfAccount(alice))
 }
 
 func txError(tx Transaction, err error) error {

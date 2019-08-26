@@ -48,6 +48,7 @@ func (n *TestNetwork) Faucet() *TestLedger {
 func (n *TestNetwork) AddNode(t testing.TB) *TestLedger {
 	node := NewTestLedger(t, TestLedgerConfig{
 		Peers: []string{n.faucet.Addr()},
+		N:     len(n.nodes),
 	})
 	n.nodes = append(n.nodes, node)
 
@@ -56,6 +57,36 @@ func (n *TestNetwork) AddNode(t testing.TB) *TestLedger {
 
 func (n *TestNetwork) Nodes() []*TestLedger {
 	return n.nodes
+}
+
+// WaitForRound waits for all the nodes in the network to
+// reach the specified round.
+func (n *TestNetwork) WaitForRound(t testing.TB, round uint64) {
+	if len(n.nodes) == 0 {
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		for _, node := range n.nodes {
+			for {
+				ri := <-node.WaitForRound(round)
+				if ri == round {
+					break
+				}
+			}
+		}
+
+		close(done)
+	}()
+
+	select {
+	case <-time.After(time.Second * 10):
+		t.Fatal("timed out waiting for round")
+
+	case <-done:
+		return
+	}
 }
 
 func (n *TestNetwork) WaitForConsensus(t testing.TB) {
@@ -122,6 +153,7 @@ type TestLedger struct {
 type TestLedgerConfig struct {
 	Wallet string
 	Peers  []string
+	N      int
 }
 
 func defaultConfig(t testing.TB) *TestLedgerConfig {
@@ -132,6 +164,7 @@ func defaultConfig(t testing.TB) *TestLedgerConfig {
 func newTestFaucet(t testing.TB) *TestLedger {
 	return NewTestLedger(t, TestLedgerConfig{
 		Wallet: "87a6813c3b4cf534b6ae82db9b1409fa7dbd5c13dba5858970b56084c4a930eb400056ee68a7cc2695222df05ea76875bc27ec6e61e8e62317c336157019c405",
+		N:      0,
 	})
 }
 
@@ -146,7 +179,7 @@ func NewTestLedger(t testing.TB, cfg TestLedgerConfig) *TestLedger {
 	client := skademlia.NewClient(addr, keys, skademlia.WithC1(sys.SKademliaC1), skademlia.WithC2(sys.SKademliaC2))
 	client.SetCredentials(noise.NewCredentials(addr, handshake.NewECDH(), cipher.NewAEAD(), client.Protocol()))
 
-	kv, cleanup := store.NewTestKV(t, "inmem", "db")
+	kv, cleanup := store.NewTestKV(t, "level", fmt.Sprintf("db_%d", cfg.N))
 	ledger := NewLedger(kv, client, WithoutGC())
 	server := client.Listen()
 	RegisterWaveletServer(server, ledger.Protocol())
@@ -178,10 +211,10 @@ func NewTestLedger(t testing.TB, cfg TestLedgerConfig) *TestLedger {
 }
 
 func (l *TestLedger) Cleanup() {
-	l.server.GracefulStop()
+	l.server.Stop()
 	<-l.stopped
 
-	//l.kvCleanup()
+	l.kvCleanup()
 }
 
 func (l *TestLedger) Addr() string {
@@ -229,6 +262,10 @@ func (l *TestLedger) Reward() uint64 {
 	return reward
 }
 
+func (l *TestLedger) RoundIndex() uint64 {
+	return l.ledger.Rounds().Latest().Index
+}
+
 func (l *TestLedger) WaitForConsensus() <-chan bool {
 	ch := make(chan bool)
 	go func() {
@@ -246,6 +283,31 @@ func (l *TestLedger) WaitForConsensus() <-chan bool {
 				current := l.ledger.Rounds().Latest()
 				if current.Index > start.Index {
 					ch <- true
+					return
+				}
+			}
+		}
+	}()
+
+	return ch
+}
+
+func (l *TestLedger) WaitForRound(index uint64) <-chan uint64 {
+	ch := make(chan uint64)
+	go func() {
+		timeout := time.NewTimer(time.Second * 3)
+		ticker := time.NewTicker(time.Millisecond * 10)
+
+		for {
+			select {
+			case <-timeout.C:
+				ch <- 0
+				return
+
+			case <-ticker.C:
+				current := l.ledger.Rounds().Latest()
+				if current.Index >= index {
+					ch <- current.Index
 					return
 				}
 			}
