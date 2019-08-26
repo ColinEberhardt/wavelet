@@ -26,17 +26,19 @@ type TestNetwork struct {
 }
 
 func NewTestNetwork(t testing.TB) *TestNetwork {
-	return &TestNetwork{
-		faucet: NewTestFaucet(t),
+	n := &TestNetwork{
+		faucet: newTestFaucet(t),
 		nodes:  []*TestLedger{},
 	}
+
+	n.nodes = append(n.nodes, n.faucet)
+	return n
 }
 
 func (n *TestNetwork) Cleanup() {
 	for _, node := range n.nodes {
 		node.Cleanup()
 	}
-	n.faucet.Cleanup()
 }
 
 func (n *TestNetwork) Faucet() *TestLedger {
@@ -52,9 +54,13 @@ func (n *TestNetwork) AddNode(t testing.TB) *TestLedger {
 	return node
 }
 
+func (n *TestNetwork) Nodes() []*TestLedger {
+	return n.nodes
+}
+
 func (n *TestNetwork) WaitForConsensus(t testing.TB) {
 	var wg sync.WaitGroup
-	for _, l := range append(n.nodes, n.faucet) {
+	for _, l := range n.nodes {
 		wg.Add(1)
 		go func(ledger *TestLedger) {
 			defer wg.Done()
@@ -80,7 +86,7 @@ func (n *TestNetwork) WaitForConsensus(t testing.TB) {
 
 func (n *TestNetwork) WaitForSync(t testing.TB) {
 	var wg sync.WaitGroup
-	for _, l := range append(n.nodes, n.faucet) {
+	for _, l := range n.nodes {
 		wg.Add(1)
 		go func(ledger *TestLedger) {
 			defer wg.Done()
@@ -103,90 +109,6 @@ func (n *TestNetwork) WaitForSync(t testing.TB) {
 	}
 }
 
-func (n *TestNetwork) Nodes() []*TestLedger {
-	return append(n.nodes, n.faucet)
-}
-
-// WaitForRound waits for all the nodes in the network to
-// reach the specified round.
-func (n *TestNetwork) WaitForRound(t testing.TB, round uint64) {
-	if len(n.nodes) == 0 {
-		return
-	}
-
-	done := make(chan struct{})
-	go func() {
-		for _, node := range n.nodes {
-			for ri := range node.WaitForRound(round) {
-				if ri == round {
-					break
-				}
-			}
-		}
-
-		close(done)
-	}()
-
-	select {
-	case <-time.After(time.Second * 10):
-		t.Fatal("timed out waiting for round")
-
-	case <-done:
-		return
-	}
-}
-
-// WaitForConsensus waits for all nodes to advance
-// by at least 1 consensus round.
-func (n *TestNetwork) WaitForConsensus(t testing.TB) {
-	if len(n.nodes) == 0 {
-		return
-	}
-
-	done := make(chan struct{})
-	go func() {
-		first := n.nodes[0]
-		round := <-first.WaitForConsensus()
-
-		for i := 1; i < len(n.nodes); i++ {
-			<-n.nodes[i].WaitForRound(round)
-		}
-
-		close(done)
-	}()
-
-	select {
-	case <-time.After(time.Second * 10):
-		t.Fatal("timed out waiting for consensus")
-
-	case <-done:
-		return
-	}
-}
-
-// WaitForLatestConsensus waits until all nodes
-// have reach the latest consensus round.
-func (n *TestNetwork) WaitForLatestConsensus(t testing.TB) {
-	if len(n.nodes) == 0 {
-		return
-	}
-
-	first := n.nodes[0]
-	current := first.RoundIndex()
-	for round := range first.WaitForConsensus() {
-		if round == 0 {
-			continue
-		}
-
-		if round == current {
-			break
-		}
-		current = round
-	}
-
-	n.WaitForRound(t, current)
-}
-
 type TestLedger struct {
 	ledger    *Ledger
 	server    *grpc.Server
@@ -206,8 +128,8 @@ func defaultConfig(t testing.TB) *TestLedgerConfig {
 	return &TestLedgerConfig{}
 }
 
-// NewTestFaucet returns an account with a lot of PERLs.
-func NewTestFaucet(t testing.TB) *TestLedger {
+// newTestFaucet returns an account with a lot of PERLs.
+func newTestFaucet(t testing.TB) *TestLedger {
 	return NewTestLedger(t, TestLedgerConfig{
 		Wallet: "87a6813c3b4cf534b6ae82db9b1409fa7dbd5c13dba5858970b56084c4a930eb400056ee68a7cc2695222df05ea76875bc27ec6e61e8e62317c336157019c405",
 	})
@@ -307,40 +229,23 @@ func (l *TestLedger) Reward() uint64 {
 	return reward
 }
 
-func (l *TestLedger) RoundIndex() uint64 {
-	return l.ledger.Rounds().Latest().Index
-}
-
-// WaitForConsensus waits until the node has advanced
-// by at least 1 consensus round.
-func (l *TestLedger) WaitForConsensus() <-chan uint64 {
-	return l.WaitForRound(l.ledger.Rounds().Latest().Index + 1)
-}
-
-// WaitForRound waits until the node reaches the specified round index.
-func (l *TestLedger) WaitForRound(index uint64) <-chan uint64 {
-	ch := make(chan uint64, 1)
+func (l *TestLedger) WaitForConsensus() <-chan bool {
+	ch := make(chan bool)
 	go func() {
-		defer close(ch)
-
-		if current := l.ledger.Rounds().Latest().Index; current >= index {
-			ch <- current
-			return
-		}
-
+		start := l.ledger.Rounds().Latest()
 		timeout := time.NewTimer(time.Second * 3)
 		ticker := time.NewTicker(time.Millisecond * 10)
 
 		for {
 			select {
 			case <-timeout.C:
-				ch <- 0
+				ch <- false
 				return
 
 			case <-ticker.C:
 				current := l.ledger.Rounds().Latest()
-				if current.Index >= index {
-					ch <- current.Index
+				if current.Index > start.Index {
+					ch <- true
 					return
 				}
 			}
@@ -486,21 +391,4 @@ func loadKeys(t testing.TB, wallet string) *skademlia.Keypair {
 	}
 
 	return keys
-}
-
-func waitFor(t testing.TB, err string, fn func() bool) {
-	timeout := time.NewTimer(time.Second * 3)
-	ticker := time.NewTicker(time.Millisecond * 500)
-
-	for {
-		select {
-		case <-timeout.C:
-			t.Fatal(err)
-
-		case <-ticker.C:
-			if !fn() {
-				return
-			}
-		}
-	}
 }

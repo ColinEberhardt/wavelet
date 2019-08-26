@@ -1,11 +1,11 @@
 package wavelet
 
 import (
-	"fmt"
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestLedger_BroadcastNop checks that:
@@ -76,12 +76,6 @@ func TestLedger_BroadcastNop(t *testing.T) {
 
 			currRound := alice.ledger.Rounds().Latest().Index
 
-			fmt.Printf("%d/%d tx applied, round=%d, prevRound=%d, root depth=%d\n",
-				appliedCount, txsCount,
-				currRound,
-				prevRound,
-				alice.ledger.Graph().RootDepth())
-
 			if currRound-prevRound > 1 {
 				t.Fatal("more than 1 round finalized")
 			}
@@ -131,15 +125,19 @@ func TestLedger_Pay(t *testing.T) {
 	testnet := NewTestNetwork(t)
 	defer testnet.Cleanup()
 
-	alice := testnet.AddNode(t, 1000000)
-	bob := testnet.AddNode(t, 100)
+	alice := testnet.AddNode(t)
+	bob := testnet.AddNode(t)
 
 	for i := 0; i < 5; i++ {
-		testnet.AddNode(t, 0)
+		testnet.AddNode(t)
 	}
 
-	assert.NoError(t, txError(alice.Pay(bob, 1237)))
+	testnet.WaitForSync(t)
 
+	assert.NoError(t, txError(testnet.Faucet().Pay(alice, 1000000)))
+	<-alice.WaitForConsensus()
+
+	assert.NoError(t, txError(alice.Pay(bob, 1337)))
 	testnet.WaitForConsensus(t)
 
 	// Bob should receive the tx amount
@@ -147,7 +145,7 @@ func TestLedger_Pay(t *testing.T) {
 
 	// Alice balance should be balance-txAmount-gas
 	aliceBalance := alice.Balance()
-	assert.True(t, aliceBalance < 1000000-1237)
+	assert.True(t, aliceBalance < 1000000-1337)
 
 	// Everyone else should see the updated balance of Alice and Bob
 	for _, node := range testnet.Nodes() {
@@ -160,12 +158,17 @@ func TestLedger_PayInsufficientBalance(t *testing.T) {
 	testnet := NewTestNetwork(t)
 	defer testnet.Cleanup()
 
-	alice := testnet.AddNode(t, 1000000)
-	bob := testnet.AddNode(t, 100)
+	alice := testnet.AddNode(t)
+	bob := testnet.AddNode(t)
 
 	for i := 0; i < 5; i++ {
-		testnet.AddNode(t, 0)
+		testnet.AddNode(t)
 	}
+
+	testnet.WaitForSync(t)
+
+	assert.NoError(t, txError(testnet.Faucet().Pay(alice, 1000000)))
+	<-alice.WaitForConsensus()
 
 	// Alice attempt to pay Bob more than what
 	// she has in her wallet
@@ -174,7 +177,7 @@ func TestLedger_PayInsufficientBalance(t *testing.T) {
 	testnet.WaitForConsensus(t)
 
 	// Bob should not receive the tx amount
-	assert.EqualValues(t, 100, bob.Balance())
+	assert.EqualValues(t, 0, bob.Balance())
 
 	// Alice should have paid for gas even though the tx failed
 	aliceBalance := alice.Balance()
@@ -184,45 +187,23 @@ func TestLedger_PayInsufficientBalance(t *testing.T) {
 	// Everyone else should see the updated balance of Alice and Bob
 	for _, node := range testnet.Nodes() {
 		assert.EqualValues(t, aliceBalance, node.BalanceOfAccount(alice))
-		assert.EqualValues(t, 100, node.BalanceOfAccount(bob))
+		assert.EqualValues(t, 0, node.BalanceOfAccount(bob))
 	}
-}
-
-func TestLedger_Gossip(t *testing.T) {
-	testnet := NewTestNetwork(t)
-	defer testnet.Cleanup()
-
-	alice := testnet.AddNode(t, 1000000)
-	bob := testnet.AddNode(t, 100)
-
-	for i := 0; i < 5; i++ {
-		testnet.AddNode(t, 0)
-	}
-
-	assert.NoError(t, txError(alice.Pay(bob, 1237)))
-
-	testnet.WaitForConsensus(t)
-
-	// When a new node joins the network, it will eventually receive
-	// all transactions in the network.
-	charlie := testnet.AddNode(t, 0)
-
-	waitFor(t, "test timed out", func() bool {
-		return charlie.BalanceOfAccount(alice) == alice.Balance() &&
-			charlie.BalanceOfAccount(bob) == bob.Balance()
-	})
 }
 
 func TestLedger_Stake(t *testing.T) {
 	testnet := NewTestNetwork(t)
 	defer testnet.Cleanup()
 
-	alice := testnet.AddNode(t, 1000000)
+	alice := testnet.AddNode(t)
 
 	for i := 0; i < 5; i++ {
-		testnet.AddNode(t, 0)
+		testnet.AddNode(t)
 	}
 
+	testnet.WaitForSync(t)
+
+	assert.NoError(t, txError(testnet.Faucet().Pay(alice, 1000000)))
 	testnet.WaitForConsensus(t)
 
 	assert.NoError(t, txError(alice.PlaceStake(9001)))
@@ -256,46 +237,6 @@ func TestLedger_Stake(t *testing.T) {
 		assert.EqualValues(t, alice.Stake(), node.StakeOfAccount(alice))
 	}
 }
-
-// func TestLedger_Reward(t *testing.T) {
-// 	testnet := NewTestNetwork(t)
-// 	defer testnet.Cleanup()
-//
-// 	alice := testnet.AddNode(t, 1000000)
-// 	bob := testnet.AddNode(t, 1000000)
-// 	charlie := testnet.AddNode(t, 1000000)
-// 	dave := testnet.AddNode(t, 1000000)
-// 	erin := testnet.AddNode(t, 0)
-//
-// 	testnet.WaitForConsensus(t)
-//
-// 	assert.EqualValues(t, 0, alice.Reward())
-// 	assert.EqualValues(t, 0, bob.Reward())
-// 	assert.EqualValues(t, 0, charlie.Reward())
-//
-// 	assert.NoError(t, txError(alice.PlaceStake(500000)))
-// 	assert.NoError(t, txError(bob.PlaceStake(500000)))
-// 	assert.NoError(t, txError(charlie.PlaceStake(sys.MinimumStake-1)))
-// 	testnet.WaitForLatestConsensus(t)
-//
-// 	// Generate some transactions
-// 	for i := 0; i < 5; i++ {
-// 		assert.NoError(t, txError(dave.Pay(erin, uint64(100)+uint64(rand.Intn(100)))))
-// 		<-dave.WaitForConsensus()
-// 	}
-//
-// 	testnet.WaitForRound(t, dave.RoundIndex())
-//
-// 	fmt.Println(alice.Reward())
-// 	fmt.Println(bob.Reward())
-//
-// 	// Alice and Bob should have received some rewards
-// 	assert.True(t, alice.Reward() > 0)
-// 	assert.True(t, bob.Reward() > 0)
-//
-// 	// Charlie shouldn't receive rewards because his stake is too little
-// 	assert.EqualValues(t, 0, charlie.Reward())
-// }
 
 func txError(tx Transaction, err error) error {
 	return err
