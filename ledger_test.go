@@ -239,6 +239,65 @@ func TestLedger_Stake(t *testing.T) {
 	}
 }
 
+func TestLedger_CallContract(t *testing.T) {
+	testnet := NewTestNetwork(t)
+	defer testnet.Cleanup()
+
+	alice := testnet.AddNode(t)
+
+	for i := 0; i < 5; i++ {
+		testnet.AddNode(t)
+	}
+
+	testnet.WaitForSync(t)
+
+	assert.NoError(t, txError(testnet.Faucet().Pay(alice, 1000000)))
+	testnet.WaitForConsensus(t)
+
+	contract, err := alice.SpawnContract("testdata/transfer_back.wasm",
+		10000, nil)
+	assert.NoError(t, err)
+
+	testnet.WaitForConsensus(t)
+
+	// Calling the contract should cause the contract to send back 250000 PERL back to alice
+	_, err = alice.CallContract(contract.ID, 500000, 100000, "on_money_received", contract.ID[:])
+	assert.NoError(t, err)
+
+	<-alice.WaitForConsensus()
+
+	assert.True(t, alice.Balance() > 700000)
+}
+
+func TestLedger_DepositGas(t *testing.T) {
+	testnet := NewTestNetwork(t)
+	defer testnet.Cleanup()
+
+	alice := testnet.AddNode(t)
+
+	for i := 0; i < 5; i++ {
+		testnet.AddNode(t)
+	}
+
+	testnet.WaitForSync(t)
+
+	assert.NoError(t, txError(testnet.Faucet().Pay(alice, 1000000)))
+	testnet.WaitForConsensus(t)
+
+	contract, err := alice.SpawnContract("testdata/transfer_back.wasm",
+		10000, nil)
+	assert.NoError(t, err)
+
+	testnet.WaitForConsensus(t)
+
+	_, err = alice.DepositGas(contract.ID, 654321)
+	assert.NoError(t, err)
+
+	<-alice.WaitForConsensus()
+
+	assert.EqualValues(t, 654321, alice.GasBalanceOfAddress(contract.ID))
+}
+
 func TestLedger_Sync(t *testing.T) {
 	testnet := NewTestNetwork(t)
 	defer testnet.Cleanup()

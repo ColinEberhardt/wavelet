@@ -3,6 +3,7 @@ package wavelet
 import (
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"strconv"
 	"sync"
@@ -238,6 +239,12 @@ func (l *TestLedger) BalanceOfAccount(node *TestLedger) uint64 {
 	return balance
 }
 
+func (l *TestLedger) GasBalanceOfAddress(address [32]byte) uint64 {
+	snapshot := l.ledger.Snapshot()
+	balance, _ := ReadAccountContractGasBalance(snapshot, address)
+	return balance
+}
+
 func (l *TestLedger) Stake() uint64 {
 	snapshot := l.ledger.Snapshot()
 	stake, _ := ReadAccountStake(snapshot, l.PublicKey())
@@ -355,6 +362,63 @@ func (l *TestLedger) Pay(to *TestLedger, amount uint64) (Transaction, error) {
 	payload := Transfer{
 		Recipient: to.PublicKey(),
 		Amount:    amount,
+	}
+
+	keys := l.ledger.client.Keys()
+	tx := AttachSenderToTransaction(
+		keys,
+		NewTransaction(keys, sys.TagTransfer, payload.Marshal()),
+		l.ledger.Graph().FindEligibleParents()...)
+
+	err := l.ledger.AddTransaction(tx)
+	return tx, err
+}
+
+func (l *TestLedger) SpawnContract(contractPath string, gasLimit uint64, params []byte) (Transaction, error) {
+	code, err := ioutil.ReadFile(contractPath)
+	if err != nil {
+		return Transaction{}, err
+	}
+
+	payload := Contract{
+		GasLimit: gasLimit,
+		Code:     code,
+		Params:   params,
+	}
+
+	keys := l.ledger.client.Keys()
+	tx := AttachSenderToTransaction(
+		keys,
+		NewTransaction(keys, sys.TagContract, payload.Marshal()),
+		l.ledger.Graph().FindEligibleParents()...)
+
+	err = l.ledger.AddTransaction(tx)
+	return tx, err
+}
+
+func (l *TestLedger) DepositGas(id [32]byte, gasDeposit uint64) (Transaction, error) {
+	payload := Transfer{
+		Recipient:  id,
+		GasDeposit: gasDeposit,
+	}
+
+	keys := l.ledger.client.Keys()
+	tx := AttachSenderToTransaction(
+		keys,
+		NewTransaction(keys, sys.TagTransfer, payload.Marshal()),
+		l.ledger.Graph().FindEligibleParents()...)
+
+	err := l.ledger.AddTransaction(tx)
+	return tx, err
+}
+
+func (l *TestLedger) CallContract(id [32]byte, amount uint64, gasLimit uint64, funcName string, params []byte) (Transaction, error) {
+	payload := Transfer{
+		Recipient:  id,
+		Amount:     amount,
+		GasLimit:   gasLimit,
+		FuncName:   []byte(funcName),
+		FuncParams: params,
 	}
 
 	keys := l.ledger.client.Keys()
