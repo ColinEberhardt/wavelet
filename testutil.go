@@ -91,12 +91,24 @@ func (n *TestNetwork) WaitForRound(t testing.TB, round uint64) {
 }
 
 func (n *TestNetwork) WaitForConsensus(t testing.TB) {
+	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, l := range n.nodes {
 		wg.Add(1)
 		go func(ledger *TestLedger) {
 			defer wg.Done()
-			assert.True(t, <-ledger.WaitForConsensus())
+			for {
+				select {
+				case c := <-ledger.WaitForConsensus():
+					if c {
+						return
+					}
+
+				case <-stop:
+					return
+				}
+			}
+
 		}(l)
 	}
 
@@ -106,12 +118,15 @@ func (n *TestNetwork) WaitForConsensus(t testing.TB) {
 		close(done)
 	}()
 
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(10 * time.Second)
 	select {
 	case <-done:
+		close(stop)
 		return
 
 	case <-timer.C:
+		close(stop)
+		<-done
 		t.Fatal("consensus round took too long")
 	}
 }
