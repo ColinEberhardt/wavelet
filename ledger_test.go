@@ -141,27 +141,19 @@ func TestLedger_Sync(t *testing.T) {
 
 	// Advance the network by a few rounds larger than sys.SyncIfRoundsDifferBy
 	for i := 0; i < int(sys.SyncIfRoundsDifferBy)+1; i++ {
-		assert.NoError(t, txError(alice.PlaceStake(10)))
+		<-alice.WaitForSync()
+		_, err := alice.PlaceStake(10)
+		if err != nil {
+			t.Fatal(err)
+		}
 		<-alice.WaitForConsensus()
 	}
 
 	testnet.WaitForRound(t, alice.RoundIndex())
 
-	var nodes []*TestLedger
-
 	// When a new node joins the network, it will eventually
 	// sync with the other nodes
 	charlie := testnet.AddNode(t)
-	nodes = append(nodes, charlie)
-	time.Sleep(time.Millisecond * 100)
-
-	eve := testnet.AddNode(t)
-	nodes = append(nodes, eve)
-	time.Sleep(time.Millisecond * 100)
-
-	oscar := testnet.AddNode(t)
-	nodes = append(nodes, oscar)
-	time.Sleep(time.Millisecond * 100)
 
 	timeout := time.NewTimer(time.Second * 30)
 	for {
@@ -170,15 +162,8 @@ func TestLedger_Sync(t *testing.T) {
 			t.Fatal("timed out waiting for sync")
 
 		default:
-			var count int
-			for _, node := range nodes {
-				ri := <-node.WaitForRound(alice.RoundIndex())
-				if ri >= alice.RoundIndex() {
-					count++
-				}
-			}
-
-			if count == len(nodes) {
+			ri := <-charlie.WaitForRound(alice.RoundIndex())
+			if ri >= alice.RoundIndex() {
 				goto DONE
 			}
 		}
@@ -186,8 +171,6 @@ func TestLedger_Sync(t *testing.T) {
 
 DONE:
 	assert.EqualValues(t, alice.Balance(), charlie.BalanceOfAccount(alice))
-	assert.EqualValues(t, alice.Balance(), eve.BalanceOfAccount(alice))
-	assert.EqualValues(t, alice.Balance(), oscar.BalanceOfAccount(alice))
 }
 
 func txError(tx Transaction, err error) error {
