@@ -310,20 +310,14 @@ func TestLedger_Sync(t *testing.T) {
 
 	testnet.WaitForSync(t)
 
-	var syncTx Transaction
 	// Advance the network by a few rounds larger than sys.SyncIfRoundsDifferBy
 	for i := 0; i < int(sys.SyncIfRoundsDifferBy)+5; i++ {
 		<-alice.WaitForSync()
-		tx, err := alice.PlaceStake(10)
+		_, err := alice.PlaceStake(10)
 		if err != nil {
 			t.Fatal(err)
 		}
 		<-alice.WaitForConsensus()
-
-		// Keep track of first tx
-		if i == 0 {
-			syncTx = tx
-		}
 	}
 
 	testnet.WaitForRound(t, alice.RoundIndex())
@@ -331,6 +325,11 @@ func TestLedger_Sync(t *testing.T) {
 	// When a new node joins the network, it should eventually
 	// sync (state and txs) with the other nodes
 	charlie := testnet.AddNode(t)
+
+	_, err := alice.Pay(charlie, 1337)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	timeout := time.NewTimer(time.Second * 30)
 	for {
@@ -349,18 +348,8 @@ func TestLedger_Sync(t *testing.T) {
 DONE:
 	assert.EqualValues(t, alice.Balance(), charlie.BalanceOfAccount(alice))
 
-	<-charlie.WaitForSync()
-	_, err := alice.Pay(charlie, 1337)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	<-charlie.WaitForConsensus()
-
-	// New node should eventually download some of the missing tx
-	waitFor(t, "cannot find tx", func() bool {
-		return charlie.FindTransaction(t, syncTx.ID) != nil
-	})
+	assert.EqualValues(t, 1337, charlie.Balance())
 }
 
 func txError(tx Transaction, err error) error {
