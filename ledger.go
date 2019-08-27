@@ -193,7 +193,8 @@ func NewLedger(kv store.KV, client *skademlia.Client, opts ...Option) *Ledger {
 	stop := make(chan struct{}) // TODO: Real graceful stop.
 	var stallDetector *StallDetector
 	stallDetector = NewStallDetector(stop, StallDetectorConfig{
-		MaxMemoryMB: cfg.MaxMemoryMB,
+		MaxMemoryMB:      cfg.MaxMemoryMB,
+		RestartOnFailure: true,
 	}, StallDetectorDelegate{
 		Ping: func() {
 			stallDetector.ReportNetworkActivity() // TODO: Real pings.

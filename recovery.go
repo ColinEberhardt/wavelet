@@ -4,6 +4,7 @@ import (
 	"github.com/perlin-network/wavelet/log"
 	"github.com/perlin-network/wavelet/lru"
 	"github.com/pkg/errors"
+	"os"
 	"runtime"
 	"runtime/pprof"
 	"sync"
@@ -26,7 +27,9 @@ type StallDetector struct {
 }
 
 type StallDetectorConfig struct {
-	MaxMemoryMB uint64
+	MaxMemoryMB      uint64
+	RestartOnFailure bool // false to exit on failure
+	DumpPrefix       string
 }
 
 type StallDetectorDelegate struct {
@@ -46,11 +49,26 @@ func NewStallDetector(stop <-chan struct{}, config StallDetectorConfig, delegate
 	}
 }
 
+func (d *StallDetector) handleFailureLocked(err error) {
+	logger := log.Node()
+
+	// Write logs before preparing for shutdown to avoid missing useful information.
+	_ = pprof.Lookup("heap").WriteTo(logger, 2)
+	_ = pprof.Lookup("goroutine").WriteTo(logger, 2)
+
+	d.delegate.PrepareShutdown(err)
+
+	if d.config.RestartOnFailure {
+		restartErr := d.tryRestart()
+		logger.Error().Err(restartErr).Msg("Failed to restart process")
+	}
+
+	os.Exit(1)
+}
+
 func (d *StallDetector) Run() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-
-	logger := log.Node()
 
 	for {
 		select {
@@ -62,9 +80,7 @@ func (d *StallDetector) Run() {
 
 			if currentTime.After(d.lastNetworkActivityTime) {
 				if currentTime.Sub(d.lastNetworkActivityTime) > 120*time.Second {
-					d.delegate.PrepareShutdown(errors.New("We did not detect any network activity during the last 2 minutes, and our Ping requests have got no responses. Node is scheduled to shutdown now."))
-					restartErr := d.tryRestart()
-					logger.Error().Err(restartErr).Msg("Failed to restart process")
+					d.handleFailureLocked(errors.New("We did not detect any network activity during the last 2 minutes, and our Ping requests have got no responses. Node is scheduled to shutdown now."))
 					d.mu.Unlock()
 					return // restarting process is impossible. No longer run the stall detector.
 				} else if currentTime.Sub(d.lastNetworkActivityTime) > 60*time.Second {
@@ -74,9 +90,7 @@ func (d *StallDetector) Run() {
 				}
 			}
 			if currentTime.After(d.lastFinalizationTime) && currentTime.After(d.lastRoundTime) && currentTime.Sub(d.lastRoundTime) > 180*time.Second && hasNetworkActivityRecently {
-				d.delegate.PrepareShutdown(errors.New("Seems that consensus has stalled. Node is scheduled to shutdown now."))
-				restartErr := d.tryRestart()
-				logger.Error().Err(restartErr).Msg("Failed to restart process")
+				d.handleFailureLocked(errors.New("Seems that consensus has stalled. Node is scheduled to shutdown now."))
 				d.mu.Unlock()
 				return
 			}
@@ -84,14 +98,7 @@ func (d *StallDetector) Run() {
 				var memStats runtime.MemStats
 				runtime.ReadMemStats(&memStats)
 				if memStats.Alloc > 1048576*d.config.MaxMemoryMB {
-					d.delegate.PrepareShutdown(errors.New("Memory usage exceeded maximum. Node is scheduled to shutdown now."))
-					restartErr := d.tryRestart()
-
-					errorLog := log.Node()
-					pprof.Lookup("heap").WriteTo(errorLog, 2)
-					pprof.Lookup("goroutine").WriteTo(errorLog, 2)
-
-					logger.Error().Err(restartErr).Msg("Failed to restart process")
+					d.handleFailureLocked(errors.New("Memory usage exceeded maximum. Node is scheduled to shutdown now."))
 					d.mu.Unlock()
 					return
 				}
